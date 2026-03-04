@@ -9,6 +9,12 @@ out="server-report_${host}_${ts}.txt"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+safe() {
+    # Run a command but never fail the whole script.
+    # Useful on old distros where tools return non-zero even with partial output.
+    "$@" || true
+}
+
 section() {
     echo
     echo "### $1"
@@ -96,9 +102,14 @@ kv() {
 
     section "Disk (filesystems)"
     if have df; then
-        # Exclude pseudo filesystems for readability
-        df -B1 -T -x tmpfs -x devtmpfs -x squashfs 2>/dev/null | sed '1s/.*/FilesystemTypeReport:/'
-        df -B1 -T -x tmpfs -x devtmpfs -x squashfs 2>/dev/null | awk 'NR>1{sum+=$3; avail+=$5} END{printf "%-28s %s\n","DiskUsedTotal(bytes):",sum; printf "%-28s %s\n","DiskAvailTotal(bytes):",avail}'
+        # Capture df output once. On old systems df can exit non-zero (e.g., for inaccessible mounts),
+        # which would otherwise terminate the script due to `set -e`.
+        df_out="$(safe df -B1 -T -x tmpfs -x devtmpfs -x squashfs 2>/dev/null)"
+        echo "FilesystemTypeReport:"
+        echo "$df_out" | tail -n +2 || true
+
+        # Totals computed from captured output (avoid running df twice).
+        echo "$df_out" | awk 'NR>1{sum+=$3; avail+=$5} END{printf "%-28s %s\n","DiskUsedTotal(bytes):",sum; printf "%-28s %s\n","DiskAvailTotal(bytes):",avail}' || true
     fi
 
     section "Block devices"
@@ -107,9 +118,9 @@ kv() {
     fi
 
     section "Network (quick)"
-    kv "Primary IP" "$(hostname -I 2>/dev/null | awk '{print $1}')"
+    kv "Primary IP" "$(safe hostname -I 2>/dev/null | awk '{print $1}')"
     if have ip; then
-        ip -o link show | awk -F': ' '{print $2}' | head -n 10 | awk '{printf "%-28s %s\n","Iface:",$1}'
+        safe ip -o link show | awk -F': ' '{print $2}' | head -n 10 | awk '{printf "%-28s %s\n","Iface:",$1}'
     fi
 
     section "Load / uptime"
@@ -119,10 +130,10 @@ kv() {
     section "Top processes (CPU/MEM snapshot)"
     if have ps; then
         echo "# top by CPU"
-        ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 12
+        safe ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 12
         echo
         echo "# top by MEM"
-        ps -eo pid,comm,%cpu,%mem --sort=-%mem | head -n 12
+        safe ps -eo pid,comm,%cpu,%mem --sort=-%mem | head -n 12
     fi
 
     section "Kernel / perf hints"
