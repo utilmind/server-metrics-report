@@ -204,7 +204,7 @@ kv() {
     # dd to /dev/shm (RAM) gives very rough upper bound if tmpfs is available.
     if [ -d /dev/shm ]; then
         sync
-        dd if=/dev/zero of=/dev/shm/.memtest.$$ bs=64M count=4 conv=fdatasync 2>&1 | awk '/copied/ {print "dd_shm_write:", $0}'
+        safe dd if=/dev/zero of=/dev/shm/.memtest.$$ bs=64M count=4 conv=fdatasync 2>&1 | awk '/copied/ {print "dd_shm_write:", $0}' || true
         rm -f /dev/shm/.memtest.$$ || true
     else
         kv "Mem bench" "skipped (/dev/shm not present)"
@@ -217,7 +217,7 @@ kv() {
     else
         if [ -d /tmp ]; then
             sync
-            dd if=/dev/zero of=/tmp/.disktest.$$ bs=64M count=16 conv=fdatasync 2>&1 | awk '/copied/ {print "dd_tmp_write:", $0}'
+            safe dd if=/dev/zero of=/tmp/.disktest.$$ bs=64M count=16 conv=fdatasync 2>&1 | awk '/copied/ {print "dd_tmp_write:", $0}' || true
             rm -f /tmp/.disktest.$$ || true
         else
             kv "Disk bench" "skipped (/tmp not present)"
