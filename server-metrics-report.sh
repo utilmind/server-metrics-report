@@ -142,18 +142,63 @@ kv() {
     kv "Swappiness" "$(cat /proc/sys/vm/swappiness 2>/dev/null || echo n/a)"
 
     section "Quick CPU benchmark"
-    # Prefer sysbench if present; fallback to openssl speed; else skip.
+    # Prefer sysbench if present; fallback to openssl speed; fallback to a portable hash-throughput test.
     if have sysbench; then
-        sysbench cpu --cpu-max-prime=20000 run 2>/dev/null | awk -F: '
-        /events per second/ {gsub(/^[ \t]+/,"",$2); printf "%-28s %s\n","sysbench_cpu_eps:",$2}
-        /total time/ {gsub(/^[ \t]+/,"",$2); printf "%-28s %s\n","sysbench_cpu_time:",$2}
+        safe sysbench cpu --cpu-max-prime=20000 run 2>/dev/null | awk -F: '
+            /events per second/ {gsub(/^[ 	]+/,"",$2); printf "%-28s %s
+","sysbench_cpu_eps:",$2}
+            /total time/ {gsub(/^[ 	]+/,"",$2); printf "%-28s %s
+","sysbench_cpu_time:",$2}
         '
     elif have openssl; then
-        # Short run; gives rough signal
-        openssl speed -seconds 3 sha256 2>/dev/null | tail -n 2 | sed 's/^/openssl_speed: /'
+        # Short run; gives rough signal. Some old builds may not support all algorithms; ignore failures.
+        safe openssl speed -seconds 3 sha256 2>/dev/null | tail -n 2 | sed 's/^/openssl_speed: /'
     else
-        kv "CPU bench" "skipped (install sysbench for comparable metric)"
+        # Portable fallback: measure hashing throughput using sha256sum (or md5sum) over a fixed buffer.
+        # This is NOT a standardized benchmark, but it provides a comparable signal across servers.
+        if have sha256sum; then
+            algo="sha256sum"
+        elif have md5sum; then
+            algo="md5sum"
+        else
+            algo=""
+        fi
+
+        if [ -n "$algo" ]; then
+            size_mb=256
+            # Prefer nanoseconds if supported; fall back to seconds.
+            t0="$(date +%s%N 2>/dev/null || date +%s)"
+            # Stream a fixed amount of zeros through the hash function.
+            safe dd if=/dev/zero bs=1M count=$size_mb 2>/dev/null | safe "$algo" >/dev/null
+            t1="$(date +%s%N 2>/dev/null || date +%s)"
+
+            # Compute duration in seconds (as float) and throughput MB/s using awk (no bc dependency).
+            awk -v t0="$t0" -v t1="$t1" -v mb="$size_mb" '
+                BEGIN {
+                    # If timestamps are in nanoseconds, they will be much larger.
+                    dt = t1 - t0
+                    if (dt > 1000000000) {
+                        sec = dt / 1000000000.0
+                    } else {
+                        sec = dt * 1.0
+                    }
+                    if (sec <= 0) sec = 0.000001
+                    thr = mb / sec
+                    printf "%-28s %.3f
+","cpu_hash_time_sec:", sec
+                    printf "%-28s %.2f
+","cpu_hash_mb_s:", thr
+                    printf "%-28s %s
+","cpu_hash_algo:", "'$algo'"
+                    printf "%-28s %d
+","cpu_hash_size_mb:", mb
+                }
+            '
+        else
+            kv "CPU bench" "skipped (install sysbench or openssl; no sha256sum/md5sum found)"
+        fi
     fi
+
 
     section "Quick memory bandwidth-ish test"
     # dd to /dev/shm (RAM) gives very rough upper bound if tmpfs is available.
